@@ -1,6 +1,6 @@
-# 🛡️ Greek Shield
+# Greek Shield
 
-**AI-Enhanced Options Risk Analytics Platform with Multi-Agent Orchestration**
+**Options risk analytics with Black-Scholes Greeks, LLM-assisted agents, Slack alerts and a Streamlit dashboard**
 
 [![Snowflake](https://img.shields.io/badge/Snowflake-29B5E8?style=for-the-badge&logo=snowflake&logoColor=white)](https://www.snowflake.com/)
 [![AWS](https://img.shields.io/badge/AWS_S3-FF9900?style=for-the-badge&logo=amazonaws&logoColor=white)](https://aws.amazon.com/s3/)
@@ -10,347 +10,184 @@
 
 ---
 
-## 📌 Project Overview
+## Project Overview
 
-Greek Shield is an enterprise-grade, AI-powered options risk monitoring system built entirely within Snowflake. The platform automates the complete workflow from raw market data ingestion to actionable risk insights, leveraging a multi-agent AI architecture to provide real-time portfolio analytics, plain-English risk explanations, and automated alerting.
+Greek Shield is an options risk monitoring system for a single underlying (AAPL by default). Python scripts pull option chains from Yahoo Finance, archive them to AWS S3, load them into a Snowflake table, compute Black-Scholes Greeks, and generate plain-English risk reports. A set of Python agents (strategy, logistics, financial control) reads the Snowflake data, optionally uses an LLM (OpenAI by default, Anthropic supported) for reasoning and explanations, and surfaces results through a Streamlit dashboard and Slack webhooks.
 
-**Developed by Team 2:**  
+**Developed by Team 2:**
 Likhith Nagaralu Gurumurthy | Manvith Reddy Dalli | Sneh Patel
 
-**Course:** DAMG 7374 17610 - Gen AI with Applications in Data Engineering  
-**Institution:** Northeastern University  
-**Term:** Fall 2024
+**Course:** DAMG 7374 17610 - Gen AI with Applications in Data Engineering
+**Institution:** Northeastern University
+**Term:** Fall 2025
+
+> **Scope of this repository.** This repo contains the Python side of the project. The course design also called for Snowflake-native objects (a layered RAW/DATA/FEATURES/PROCESSED/ALERTS/AGENTS schema, scheduled tasks, UDFs, Cortex procedures). Those objects, and any DDL for them, are **not** included here. The code reads two of them (`PROCESSED.DAILY_RISK_SUMMARY`, `ALERTS.RISK_ALERTS`) but nothing in this repo creates or populates them. See [Required Snowflake tables](#required-snowflake-tables).
 
 ---
 
-## 🎯 Problem Statement
+## Problem Statement
 
-Options traders face four critical challenges:
+Options traders need to track how exposure changes as prices, implied volatility and time to expiry move:
 
-1. **Manual Risk Tracking Overhead** - Traders spend 2-3 hours daily manually calculating Greeks (Delta, Gamma, Theta, Vega, Rho) across 100+ contracts, a process prone to human error
-
-2. **Computational Complexity at Scale** - Black-Scholes partial differential equation solving requires continuous recalculation as underlying prices, implied volatility, and time-to-expiry change throughout the trading day
-
-3. **Dangerous Risk Awareness Lag** - Manual workflows create critical delays between exposure changes and trader awareness, potentially resulting in unhedged positions during volatile market conditions
-
-4. **Lack of Interpretability** - Traditional systems output raw Greek values without contextual explanations, making it difficult for traders to understand why a position is risky or what actions to take
+1. **Manual risk tracking** - Computing Delta, Gamma, Theta, Vega and Rho across a whole option chain by hand is slow and error-prone.
+2. **Recalculation** - Greeks go stale as soon as the underlying price, IV or days to expiry change.
+3. **Awareness lag** - Without automation, exposure changes may go unnoticed until after the fact.
+4. **Interpretability** - Raw Greek values do not explain why a position is risky or what to watch.
 
 ---
 
-## 💡 Solution
+## What the code does
 
-Greek Shield solves these challenges through:
+- **Ingestion pipeline** (`final_complete_pipeline.py`) - Yahoo Finance (via `yfinance`) → S3 (JSON + CSV) → Snowflake `OPTIONS_SNAPSHOT`, then builds a text risk report from `PROCESSED.DAILY_RISK_SUMMARY` and `ALERTS.RISK_ALERTS` and writes it to `risk_reports/`.
+- **Black-Scholes Greeks** (`calculate_greeks.py`) - Computes Delta, Gamma, Theta, Vega and Rho in Python (NumPy/SciPy) for rows in `OPTIONS_SNAPSHOT` with no Greeks yet, and writes them back. Contracts without a usable implied volatility are skipped and counted rather than priced with a made-up IV.
+- **Agents** (`agents/core/`):
+  - `StrategyAgent` / `EnhancedStrategyAgent` - reads recent market data and portfolio risk from Snowflake, picks a strategy with an LLM (rule-based fallback when no LLM is configured), and adds plain-English summaries, scenario analysis and confidence scoring.
+  - `LogisticsAgent` - filters available contracts by DTE and liquidity.
+  - `FinancialAgent` - rule-based budget and risk-limit checks.
+  - `OrchestratorAgent` - runs the three agents in sequence.
+- **Plain-English risk monitor** (`risk_monitor_agent.py`) - console dashboard explaining the latest Greeks.
+- **Slack alerts** (`utils/slack_manager.py`) - optional webhook notifications (`SLACK_ALERTS_ENABLED=true`).
+- **Streamlit dashboard** (`streamlit_dashboard.py`) - runs the agent workflow interactively and charts the results.
 
-- **Fully Automated ETL Pipeline** - Yahoo Finance API → AWS S3 → Snowflake with zero manual intervention
-- **6-Layer Medallion Architecture** - RAW → DATA → FEATURES → PROCESSED → ALERTS → AGENTS ensuring data quality and lineage
-- **Black-Scholes Greeks Computation** - Custom Snowflake UDFs calculate all five Greeks at scale
-- **Multi-Agent AI Orchestration** - Four specialized agents powered by Snowflake Cortex and GPT-3.5 for intelligent risk monitoring
-- **Real-time Alerting** - Slack webhook integration for instant risk notifications
-- **Interactive Visualization** - Streamlit dashboard with live Greeks charts and portfolio tracking
-- **Governance Layer** - Built-in safety boundaries preventing trading advice while allowing risk analysis
+Not included: a scheduler (run the pipeline with cron or similar), Snowflake UDFs/tasks/Cortex code, a natural-language query interface, or a governance layer that blocks trading advice. The strategy agent does produce strategy recommendations; treat them as educational output, not financial advice.
 
 ---
 
-## 🏗️ System Architecture
+## Quickstart
 
-The complete system architecture demonstrates the end-to-end data flow from Yahoo Finance API through AWS S3 staging to Snowflake's 6-layer medallion architecture, culminating in real-time Slack alerts and interactive Streamlit visualizations.
+Requirements: Python 3.10-3.12 (the pinned NumPy/SciPy versions do not support 3.13), a Snowflake account with the tables listed below, an S3 bucket, and optionally OpenAI/Anthropic API keys and a Slack webhook.
+
+```bash
+# 1. Create and activate a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Configure credentials
+cp .env.example .env
+# edit .env with your Snowflake, AWS, LLM and Slack settings
+
+# 4. Ingest today's option chain (entry point)
+python final_complete_pipeline.py
+
+# 5. Compute Greeks for newly loaded contracts
+python calculate_greeks.py
+
+# 6. Launch the dashboard
+streamlit run streamlit_dashboard.py
+```
+
+Other entry points:
+
+- `python run_enhanced_system.py` - run the full agent workflow from the command line (writes to `agent_outputs/`).
+- `python risk_monitor_agent.py` - plain-English risk dashboard in the terminal.
+- `python analyze_greeks.py`, `python verify_data.py`, `python check_table_structure.py` - inspection helpers.
+- `fetch_to_s3.py`, `load_to_snowflake_fixed.py`, `yahoo_to_s3_to_snowflake.py` - earlier, standalone versions of the ingestion steps. `yahoo_to_s3_to_snowflake.py` targets an older `OPTIONS_SNAPSHOT` column layout and does not match the one used by the rest of the code.
+
+Configuration notes:
+
+- If no OpenAI key is configured, agents log a warning and fall back to rule-based logic.
+- `OPENAI_MODEL` (default `gpt-4o-mini`) and `ANTHROPIC_MODEL` (default `claude-sonnet-4-5`) select the LLM.
+- `SNOWFLAKE_INSECURE_MODE=true` disables TLS certificate validation for Snowflake. It defaults to off; only enable it for local debugging of certificate issues.
+
+---
+
+## Required Snowflake tables
+
+The DDL for these tables is not in this repo (the course TA provisioned `OPTIONS_SNAPSHOT`). The columns below are the ones the code reads or writes; column types are not recorded here.
+
+| Table | Used by | Columns referenced |
+|-------|---------|--------------------|
+| `OPTIONS_SNAPSHOT` (connection's default schema) | pipeline, `calculate_greeks.py`, agents, dashboard | `SNAPSHOT_TS`, `SYMBOL`, `CONTRACT_SYMBOL`, `OPTION_TYPE`, `STRIKE`, `EXPIRY`, `BID`, `ASK`, `LAST_PRICE`, `VOLUME`, `OPEN_INTEREST`, `IMPLIED_VOL`, `UNDERLYING_PRICE`, `DTE`, `ID_MD5`, `DELTA`, `GAMMA`, `THETA`, `VEGA`, `RHO` |
+| `RISK_MONITOR.PROCESSED.DAILY_RISK_SUMMARY` | pipeline report, `StrategyAgent` | `ASOF_DATE`, `TICKER`, `NET_DELTA`, `NET_GAMMA`, `NET_THETA`, `NET_VEGA`, `NET_RHO`, `N_CONTRACTS`, `N_ITM`, `N_OTM`, `N_ATM` |
+| `RISK_MONITOR.ALERTS.RISK_ALERTS` | pipeline report | `GENERATED_TIMESTAMP`, `TICKER`, `EXPIRATION_DATE`, `STRIKE_PRICE`, `OPTION_TYPE`, `AGENT_NAME`, `SEVERITY`, `ALERT_TYPE`, `PLAIN_ENGLISH_SUMMARY`, `RECOMMENDATION`, `CURRENT_DELTA`, `CURRENT_GAMMA`, `CURRENT_THETA`, `CURRENT_VEGA`, `DAYS_TO_EXPIRATION` |
+| `FEATURES.OPTIONS_GREEKS` | part of the Snowflake-side design only | not referenced by any query in this repo |
+
+If `DAILY_RISK_SUMMARY` or `RISK_ALERTS` is missing, the pipeline still loads data but the risk report contains an error message, and the strategy agent reports portfolio risk as `unknown`.
+
+---
+
+## System Architecture
+
+The diagram below shows the full course design, including the Snowflake-native layers that are not part of this repo.
 
 <p align="center">
   <img src="./architecture_diagram.png" alt="Greek Shield System Architecture" width="100%"/>
 </p>
 
-### Architecture Highlights
+### Data flow implemented in this repo
 
-**Left Side: Data Ingestion**
-- Yahoo Finance Options API provides contract data, market prices, and Greeks
-- AWS S3 serves as staging layer for JSON and CSV backup storage
-- Automated daily fetch at 6PM PST with versioned storage
-
-**Center: Snowflake Processing Pipeline**
-- **Layer 1 (RAW):** Immutable ingestion into OPTIONS_STAGE and PRICES_DAILY
-- **Layer 2 (DATA):** Deduplication and cleaning into OPTIONS_LATEST and DEDUP tables
-- **Layer 3 (FEATURES):** Black-Scholes Greeks computation via UDFs (Delta, Gamma, Theta, Vega, Rho)
-- **Layer 4 (PROCESSED):** Portfolio aggregation into DAILY_SUMMARY
-- **Layer 5 (ALERTS):** AI analysis producing RISK_ALERTS and LOGS
-- **Layer 6 (AGENTS):** Multi-agent orchestration layer with all four agents
-
-**Right Side: Output Delivery**
-- Slack webhooks for real-time risk notifications
-- Streamlit dashboard for interactive portfolio monitoring
-
-### Data Flow
-
-**Yahoo Finance API** (Daily 6PM PST)  
-↓  
-**AWS S3 Staging** (JSON + CSV backup)  
-↓  
-**Snowflake ETL Pipeline** (6 layers)  
-- Processing steps: Deduplication → Greeks UDF → Aggregation → AI Analysis → Orchestration
-↓  
-**Multi-Agent AI Analysis** (Cortex + GPT-3.5)  
-↓  
-**Outputs:** Slack Alerts + Streamlit Dashboard
-
-### Snowflake Architecture Layers
-
-1. **RAW Layer** - Immutable data ingestion (OPTIONS_STAGE, PRICES_DAILY)
-2. **DATA Layer** - Cleaned and deduplicated (OPTIONS_LATEST, OPTIONS_LATEST_DEDUP, STOCK_PRICES)
-3. **FEATURES Layer** - Greeks computation and risk scoring (OPTIONS_GREEKS, RISK_EVAL_ENHANCED UDF, OPTIONS_FEATURES)
-4. **PROCESSED Layer** - Portfolio aggregations (DAILY_GREEKS_SUMMARY, DAILY_RISK_SUMMARY)
-5. **ALERTS Layer** - AI-generated insights (RISK_AUDITOR_LOGS, RISK_ALERTS, AGENT_MEMORY)
-6. **AGENTS Layer** - Multi-agent orchestration (AGENT_ORCHESTRATOR, RISK_PLANNER, RISK_AUDITOR, SCHEDULING_OPTIMIZER)
+**Yahoo Finance** (`yfinance`)
+↓
+**AWS S3** (JSON + CSV archive per day)
+↓
+**Snowflake `OPTIONS_SNAPSHOT`** (row inserts from Python)
+↓
+**`calculate_greeks.py`** (Black-Scholes in Python, written back to Snowflake)
+↓
+**Agents** (Snowflake queries + optional LLM)
+↓
+**Outputs:** text risk reports, Streamlit dashboard, optional Slack alerts
 
 ---
 
-## 🤖 Multi-Agent System
-
-### Agent 1: RISK_PLANNER
-**Purpose:** Portfolio health monitoring  
-**Input:** PROCESSED.DAILY_GREEKS_SUMMARY  
-**Outputs:** Volatility regime detection, delta imbalance alerts, gamma spike warnings  
-**Techniques:** Threshold-based rule engine, LLM validation, SQL aggregation
-
-### Agent 2: SCHEDULING_OPTIMIZER
-**Purpose:** Pipeline reliability and task optimization  
-**Analyzes:** Task runtimes, failure patterns, data freshness, staleness  
-**Uses:** INFORMATION_SCHEMA.TASK_HISTORY  
-**Outputs:** Pipeline health status, optimal scheduling recommendations
-
-### Agent 3: RISK_AUDITOR
-**Purpose:** Contract-level risk evaluation with plain-English explanations  
-**Workflow:**
-1. Retrieve latest ASOF_DATE
-2. Compute risk scores using RISK_EVAL_ENHANCED UDF
-3. Insert results into RISK_AUDITOR_LOGS
-4. Generate explanations via Snowflake Cortex
-
-**Output:** Detailed contract risk assessments with natural language summaries
-
-### Agent 4: AGENT_ORCHESTRATOR
-**Purpose:** Natural language interface and central coordination  
-**Capabilities:**
-- Intent classification using LLM (Llama-8b)
-- Dynamic SQL query generation and routing
-- Session-based agent memory (AGENT_MEMORY table)
-- Explanation generation (Llama-70b)
-- Safety boundary enforcement
-
-**Example Interactions:**
-- "Why is AAPL251205C00232500 risky?" → Detailed risk explanation
-- "Show OTM puts expiring next week" → Filtered contract list
-- "Is the pipeline healthy?" → Data freshness validation
-
----
-
-## 🔄 User Flow
-
-The user flow diagram illustrates the complete trader journey through Greek Shield, from system entry to informed trading decisions, highlighting the multi-agent orchestration and governance layers.
+## User Flow
 
 <p align="center">
   <img src="./user_flow_diagram.png" alt="Greek Shield User Flow" width="100%"/>
 </p>
 
-### Complete Journey
-
-**Background Process (Automated)**
-- Pipeline runs automatically: COPY → MERGE → GREEKS → SUMMARY → ALERTS → AUDIT → READY
-- No manual intervention required
-- Executes daily at 6PM PST
-
-**User Interaction Flow**
-
-1. **Trader Entry** - Opens Streamlit dashboard or checks Slack notifications (Morning 9AM EST)
-
-2. **Two Entry Paths:**
-   - **Path A (Slack Alert):** Receives high-risk notifications with AI-generated summaries
-   - **Path B (Dashboard):** Views interactive Greeks charts and portfolio exposure
-
-3. **Natural Language Query** - Asks questions:
-   - "Why is this risky?"
-   - "Show OTM puts expiring next week"
-   - "Is the pipeline healthy?"
-
-4. **Orchestrator Routes** - AGENT_ORCHESTRATOR performs:
-   - Intent parsing (portfolio risk vs pipeline health vs contract query)
-   - Safety checks (blocks trading advice, allows risk analysis)
-   - Agent routing (selects appropriate specialized agent)
-
-5. **Agent Execution** - Specialized agent processes request:
-   - **A1 (PLANNER):** Market health monitoring
-   - **A2 (SCHEDULER):** Pipeline health validation
-   - **A3 (AUDITOR):** Contract-level risk evaluation
-
-6. **AI Response** - Receives plain-English explanation:
-   - Example: "MEDIUM RISK: Delta 0.78, IV elevated at 42%. Deep ITM with directional sensitivity"
-   - Includes structured data and contextual analysis
-
-7. **Trader Decision** - Three possible actions:
-   - **Accept:** Continue monitoring, risk within tolerance
-   - **Adjust:** Hedge exposure, modify position
-   - **Close:** Exit position, reduce risk
-
-8. **Governance Layer (Always Active):**
-   - **Blocked:** Trading recommendations, buy/sell advice
-   - **Allowed:** Risk explanations, portfolio analysis, data exploration
-
-9. **Continuous Loop** - System provides ongoing monitoring with hourly updates and threshold-based alerts
-
-### Agentic System Properties Demonstrated
-
-1. **Automated Pipeline** - System runs daily at 6PM PST (COPY → MERGE → GREEKS → SUMMARY → ALERTS → AUDIT)
-2. **Trader Entry** - Opens Streamlit dashboard or receives Slack notification (9AM EST)
-3. **Two Paths:**
-   - Path A: Review Slack alerts with AI explanations
-   - Path B: Explore dashboard with Greeks charts
-4. **Natural Language Query** - Ask questions like "Why is AAPL risky?" or "Show high-risk contracts"
-5. **Orchestrator Routes** - Parses intent, applies safety checks, selects appropriate agent
-6. **Agent Execution** - Specialized agent (Planner/Scheduler/Auditor) processes query
-7. **AI Response** - Receive plain-English explanation with structured data
-8. **Informed Decision** - Accept risk, adjust hedge, or close position
-9. **Continuous Loop** - System monitors portfolio with hourly updates and real-time alerts
+1. Run the ingestion pipeline and Greeks calculation (manually or on a schedule you set up).
+2. Open the Streamlit dashboard, choose a ticker, budget, risk profile and goal.
+3. The strategy agent analyses market conditions and portfolio risk and proposes a strategy with a plain-English explanation, scenarios and a confidence score.
+4. The logistics agent filters contracts by expiry and liquidity; the financial agent checks budget and risk limits.
+5. Results are shown in the dashboard and, if enabled, sent to Slack.
 
 ---
 
-## 📊 Key Features
+## Technology Stack
 
-### Data Processing
-- **Automated ingestion** from Yahoo Finance Options API with 5-retry exponential backoff
-- **Schema normalization** with type casting and IV normalization
-- **Deduplication** using ROW_NUMBER() window functions to retain latest snapshots
-- **Feature engineering** including moneyness calculation, liquidity flags, and IV z-scores
-- **Black-Scholes Greeks** computed via Snowflake UDFs (Delta, Gamma, Theta, Vega, Rho)
-
-### AI Capabilities
-- **Snowflake Cortex integration** for risk interpretation
-- **GPT-3.5 integration** for natural language understanding
-- **Multi-agent coordination** with specialized roles
-- **Intent classification** routing queries to appropriate agents
-- **Plain-English explanations** making complex metrics accessible
-
-### Governance & Safety
-- **Blocked queries:** Trading advice, position recommendations
-- **Allowed queries:** Risk analysis, exposure trends, data exploration
-- **Audit trails** for all agent interactions
-- **Data validation** at every pipeline stage
-
-### Alerting & Visualization
-- **Slack webhooks** for real-time notifications (hourly updates + threshold alerts)
-- **Streamlit dashboard** with interactive Greeks charts
-- **Portfolio monitoring** with drill-down capabilities
-- **Historical trend analysis** for regime detection
+- **Data:** Snowflake (storage and SQL), AWS S3 (raw archive), Yahoo Finance via `yfinance`
+- **Analytics:** Python, pandas, NumPy, SciPy (Black-Scholes Greeks)
+- **AI:** OpenAI Chat Completions (default) or Anthropic Messages API, via `utils/llm_manager.py`
+- **Delivery:** Streamlit + Plotly dashboard, Slack incoming webhooks
 
 ---
 
-## 🎯 Outcomes
+## Future Enhancements
 
-- ✅ Successfully automated options data pipeline processing AAPL contracts daily from Yahoo Finance through S3 to Snowflake
-- ✅ Implemented Black-Scholes Greeks computation using Snowflake UDFs for Delta, Gamma, Theta, Vega, and Rho calculations
-- ✅ Built 4-agent AI system for market health monitoring, task optimization, risk auditing, and natural language querying
-- ✅ Achieved 70% performance improvement using Snowflake push-down compute vs traditional Python extraction
-- ✅ Deployed real-time Slack alerting for high-risk positions and market regime changes
-- ✅ Created Streamlit dashboard with interactive Greeks visualization and portfolio risk monitoring
-- ✅ Validated medallion architecture scalability supporting expansion to multiple tickers without code changes
+- Commit the Snowflake schema (DDL) and any tasks/UDFs so the project can be reproduced from scratch
+- Multi-ticker monitoring beyond AAPL
+- Scheduling inside the repo (or Snowflake tasks) instead of manual/cron runs
+- Automated tests for the Greeks calculation and agents
+- Intraday updates and scenario stress testing
 
 ---
 
-## 🛠️ Technology Stack
-
-### Data Platform
-- **Snowflake** - Data warehouse, compute engine, task orchestration
-- **AWS S3** - Staging layer for backup and durability
-- **Yahoo Finance API** - Real-time options market data
-
-### AI/ML
-- **Snowflake Cortex** - LLM integration for risk interpretation
-- **GPT-3.5 Turbo** - Natural language understanding
-- **Custom UDFs** - Risk scoring algorithms
-- **JavaScript Stored Procedures** - Agent logic implementation
-
-### Delivery & Visualization
-- **Slack API** - Real-time webhook notifications
-- **Streamlit** - Interactive dashboard and user interface
-- **Python** - Data orchestration and API integration
-
----
-
-## 📈 Performance Metrics
-
-| Metric | Value |
-|--------|-------|
-| Contracts Processed Daily | AAPL options chain |
-| End-to-End Latency | Under 5 minutes |
-| Automation Rate | 100% (zero manual intervention) |
-| AI Explanation Accuracy | 95% (manual validation) |
-| Performance Improvement | 70% (vs Python extraction) |
-| Alert Frequency | Hourly + threshold-based |
-
----
-
-## 🔮 Future Enhancements
-
-- **Multi-ticker portfolio monitoring** - Expand beyond AAPL to 100+ underlying assets
-- **Real-time streaming** - Implement Snowpipe for intraday updates
-- **Predictive analytics** - ML models for Greeks forecasting using historical patterns
-- **Scenario analysis** - Stress testing capabilities for tail risk evaluation
-- **Mobile application** - Push notifications for critical risk threshold breaches
-- **Advanced visualizations** - 3D Greeks surface plots and correlation heatmaps
-
----
-
-## 🏆 Key Innovations
-
-1. **Push-Down Compute Pattern** - Greeks calculations execute in Snowflake's native engine, eliminating data movement and reducing processing time by 70%
-
-2. **AI-Powered Explainability** - Cortex LLM and GPT-3.5 translate complex quantitative metrics into actionable plain-English insights
-
-3. **Multi-Agent Orchestration** - Specialized agents coordinate through natural language interfaces, enabling conversational risk exploration
-
-4. **Governance by Design** - Safety boundaries built into the system architecture, not bolted on afterward
-
-5. **Medallion Architecture** - 6-layer design ensures data quality, lineage traceability, and seamless scalability
-
----
-
-## 📚 Academic Context
-
-This project demonstrates how modern cloud data platforms can serve as complete AI application development environments beyond traditional data storage. By leveraging Snowflake's native capabilities (UDFs, Tasks, Stored Procedures, Cortex) with advanced AI models, Greek Shield proves that complex financial analytics can be built entirely within data warehouse ecosystems while maintaining enterprise-grade governance, explainability, and performance.
-
-**Key Contributions:**
-- Novel application of multi-agent AI within data warehouse platforms
-- Demonstration of push-down compute patterns for financial derivatives
-- Integration of LLM-powered explainability into quantitative risk systems
-- Implementation of governance frameworks for AI-driven analytics
-
----
-
-## 🤝 Team
+## Team
 
 **Team 2 - Greek Shield**
 
 - Likhith Nagaralu Gurumurthy
-- Manvith Reddy Dalli  
+- Manvith Reddy Dalli
 - Sneh Patel
 
-**Course:** DAMG 7374 17610 - Gen AI with Applications in Data Engineering  
-**Instructor:** Professor [Name]  
-**Institution:** Northeastern University  
-**Term:** Fall 2024
+**Course:** DAMG 7374 17610 - Gen AI with Applications in Data Engineering
+**Institution:** Northeastern University
+**Term:** Fall 2025
 
 ---
 
-## 📄 License
+## License
 
-This project is part of academic coursework at Northeastern University.
+Released under the [MIT License](./LICENSE).
 
 ---
 
 ## Acknowledgments
 
-- Yahoo Finance for providing options market data API
-- Snowflake for Cortex AI capabilities
+- Yahoo Finance for options market data
 - Northeastern University for academic support
 - Course instructors for guidance on Gen AI applications
-
----
-
-
