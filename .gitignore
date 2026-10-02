@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Secrets
+.env
+
+# Runtime output
+*.log
+risk_reports/
+agent_outputs/
+data/
+
+# OS
+.DS_Store
