@@ -72,7 +72,8 @@ class BaseAgent(ABC):
                 database=os.getenv('SNOWFLAKE_DATABASE'),
                 schema=os.getenv('SNOWFLAKE_SCHEMA'),
                 role=os.getenv('SNOWFLAKE_ROLE'),
-                insecure_mode=True,
+                # Disables TLS certificate checks; opt-in only via env var
+                insecure_mode=os.getenv('SNOWFLAKE_INSECURE_MODE', 'false').lower() == 'true',
                 client_session_keep_alive=True
             )
             self.logger.info("✅ Connected to Snowflake")

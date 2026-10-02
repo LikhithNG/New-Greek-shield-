@@ -47,7 +47,10 @@ def safe_float(value, default=0.0):
         return default
 
 def get_snowflake_connection():
-    """Connect to Snowflake using PAT - WITH SSL FIX"""
+    """Connect to Snowflake using PAT.
+
+    TLS certificate validation stays on unless SNOWFLAKE_INSECURE_MODE=true.
+    """
     return snowflake.connector.connect(
         user=os.getenv('SNOWFLAKE_USER'),
         password=os.getenv('SNOWFLAKE_PASSWORD'),
@@ -56,7 +59,7 @@ def get_snowflake_connection():
         database=os.getenv('SNOWFLAKE_DATABASE'),
         schema=os.getenv('SNOWFLAKE_SCHEMA'),
         role=os.getenv('SNOWFLAKE_ROLE'),
-        insecure_mode=True,  # FIX: Bypass SSL certificate validation
+        insecure_mode=os.getenv('SNOWFLAKE_INSECURE_MODE', 'false').lower() == 'true',
         client_session_keep_alive=True  # Keep connection alive
     )
 
@@ -293,7 +296,7 @@ def main():
         logging.info(f"\n💾 STEP 3: Loading to Snowflake")
         
         conn = get_snowflake_connection()
-        logging.info("   ✅ Connected to Snowflake (SSL bypass enabled)")
+        logging.info("   ✅ Connected to Snowflake")
         
         cursor = conn.cursor()
         loaded = 0
