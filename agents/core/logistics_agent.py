@@ -104,8 +104,10 @@ class LogisticsAgent(BaseAgent):
             return results
         
         except Exception as e:
+            # Re-raise: an empty list would be indistinguishable from
+            # "no contracts available" and report a false infeasibility.
             self.logger.error(f"Failed to fetch contracts: {e}")
-            return []
+            raise
     
     def _apply_temporal_filters(self, contracts: list, strategy: dict) -> list:
         """Filter contracts based on time constraints (DTE)"""

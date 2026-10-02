@@ -111,6 +111,12 @@ def visual_risk_dashboard():
         AND SNAPSHOT_TS >= CURRENT_TIMESTAMP() - INTERVAL '1 DAY'
     """, conn)
     
+    if df.empty:
+        print("\n⚠️  No options with Greeks found in OPTIONS_SNAPSHOT for the last day.")
+        print("   Run final_complete_pipeline.py and calculate_greeks.py first.")
+        conn.close()
+        return
+    
     total_contracts = len(df)
     print(f"\n📊 Analyzing {total_contracts} AAPL options contracts from latest collection")
     print(f"📅 Current AAPL Price: ${df['UNDERLYING_PRICE'].iloc[0]:.2f}")
