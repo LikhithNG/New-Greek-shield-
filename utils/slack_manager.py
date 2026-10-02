@@ -19,6 +19,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+SLACK_TIMEOUT_SECONDS = 10
+
 
 class SlackAlertManager:
     """Manages Slack notifications for agent recommendations"""
@@ -63,7 +65,8 @@ class SlackAlertManager:
             response = requests.post(
                 self.webhook_url,
                 json=message,
-                headers={'Content-Type': 'application/json'}
+                headers={'Content-Type': 'application/json'},
+                timeout=SLACK_TIMEOUT_SECONDS
             )
             
             if response.status_code == 200:
@@ -220,7 +223,8 @@ class SlackAlertManager:
             response = requests.post(
                 self.webhook_url,
                 json=payload,
-                headers={'Content-Type': 'application/json'}
+                headers={'Content-Type': 'application/json'},
+                timeout=SLACK_TIMEOUT_SECONDS
             )
             
             return response.status_code == 200
@@ -255,9 +259,11 @@ class SlackAlertManager:
         }
         
         try:
-            response = requests.post(self.webhook_url, json=message)
+            response = requests.post(self.webhook_url, json=message,
+                                     timeout=SLACK_TIMEOUT_SECONDS)
             return response.status_code == 200
-        except:
+        except Exception as e:
+            logger.error(f"Error alert failed: {e}")
             return False
     
     def test_connection(self) -> bool:
@@ -283,7 +289,8 @@ class SlackAlertManager:
             response = requests.post(
                 self.webhook_url,
                 json=test_message,
-                headers={'Content-Type': 'application/json'}
+                headers={'Content-Type': 'application/json'},
+                timeout=SLACK_TIMEOUT_SECONDS
             )
             
             if response.status_code == 200:
