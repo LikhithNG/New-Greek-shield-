@@ -3,10 +3,11 @@
 UPDATED AUTOMATED PIPELINE - SNOWFLAKE AS SINGLE SOURCE OF TRUTH
 Yahoo Finance → S3 → Snowflake → Risk Report (from Snowflake layers)
 Runs daily at 6:30 PM - Fully Automated
-UPDATED: Greeks now computed by Snowflake, not Python
+Greeks are computed afterwards by calculate_greeks.py (Black-Scholes in Python)
 """
 
 import os
+import sys
 from dotenv import load_dotenv
 import boto3
 import snowflake.connector
@@ -34,7 +35,7 @@ def safe_int(value, default=0):
         return default
     try:
         return int(value)
-    except:
+    except (TypeError, ValueError):
         return default
 
 def safe_float(value, default=0.0):
@@ -43,7 +44,7 @@ def safe_float(value, default=0.0):
         return default
     try:
         return float(value)
-    except:
+    except (TypeError, ValueError):
         return default
 
 def get_snowflake_connection():
@@ -210,6 +211,8 @@ def main():
     
     ticker = 'AAPL'
     report_file = None  # Initialize variable to avoid UnboundLocalError
+    conn = None
+    exit_code = 0
     
     try:
         # ===============================================
@@ -219,6 +222,8 @@ def main():
         
         stock = yf.Ticker(ticker)
         hist = stock.history(period='1d')
+        if hist.empty:
+            raise ValueError(f"No price history returned for {ticker}")
         underlying_price = hist['Close'].iloc[-1]
         logging.info(f"   Current price: ${underlying_price:.2f}")
         
@@ -300,6 +305,7 @@ def main():
         
         cursor = conn.cursor()
         loaded = 0
+        failed = 0
         
         for option in all_options:
             try:
@@ -333,11 +339,12 @@ def main():
                 loaded += 1
             except Exception as e:
                 # Log but continue with other inserts
-                logging.debug(f"   Skipped duplicate: {option['contract_symbol']}")
+                failed += 1
+                logging.warning(f"   ⚠️  Insert failed for {option['contract_symbol']}: {e}")
                 continue
         
         conn.commit()
-        logging.info(f"   ✅ Loaded {loaded} rows to Snowflake")
+        logging.info(f"   ✅ Loaded {loaded} rows to Snowflake ({failed} failed)")
         
         cursor.execute("SELECT COUNT(*) FROM OPTIONS_SNAPSHOT")
         total = cursor.fetchone()[0]
@@ -366,9 +373,7 @@ def main():
         except Exception as e:
             logging.error(f"   ❌ Risk report error: {e}")
         
-        # Close connections
         cursor.close()
-        conn.close()
         
         # ===============================================
         # FINAL SUMMARY
@@ -377,7 +382,8 @@ def main():
         logging.info("✅ COMPLETE PIPELINE FINISHED SUCCESSFULLY!")
         logging.info(f"   Collected: {len(all_options)} contracts")
         logging.info(f"   Loaded into OPTIONS_SNAPSHOT: {loaded} contracts")
-        logging.info("   Greeks: computed by Snowflake tasks into FEATURES.OPTIONS_GREEKS")
+        logging.info(f"   Failed inserts: {failed}")
+        logging.info("   Greeks: run calculate_greeks.py to populate OPTIONS_SNAPSHOT Greek columns")
         logging.info(f"   Total in OPTIONS_SNAPSHOT: {total} contracts")
         
         if report_file:
@@ -391,13 +397,18 @@ def main():
         logging.error(f"❌ Pipeline error: {e}")
         import traceback
         logging.error(traceback.format_exc())
-        
+        exit_code = 1
+    
+    finally:
         # Ensure connection is closed even on error
-        try:
-            if 'conn' in locals() and conn:
+        if conn is not None:
+            try:
                 conn.close()
-        except:
-            pass
+            except Exception as e:
+                logging.warning(f"Failed to close Snowflake connection: {e}")
+    
+    if exit_code:
+        sys.exit(exit_code)
 
 if __name__ == "__main__":
     main()
