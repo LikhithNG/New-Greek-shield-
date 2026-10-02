@@ -6,6 +6,7 @@ LLM Manager - Supports both OpenAI and Anthropic
 import os
 import json
 import logging
+import time
 from typing import Dict, Optional
 from dotenv import load_dotenv
 
@@ -16,6 +17,10 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
+DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-5'
+RETRY_BASE_DELAY_SECONDS = 1
 
 
 class LLMManager:
@@ -50,7 +55,10 @@ class LLMManager:
                 )
             
             self.client = OpenAI(api_key=api_key)
-            self.model = os.getenv('AGENT_DEFAULT_MODEL', 'gpt-4-turbo-preview')
+            # AGENT_DEFAULT_MODEL is kept as a legacy fallback
+            self.model = (os.getenv('OPENAI_MODEL')
+                          or os.getenv('AGENT_DEFAULT_MODEL')
+                          or DEFAULT_OPENAI_MODEL)
             
         except ImportError:
             raise ImportError("openai not installed! Run: pip install openai")
@@ -65,7 +73,7 @@ class LLMManager:
                 raise ValueError("ANTHROPIC_API_KEY not found in .env")
             
             self.client = anthropic.Anthropic(api_key=api_key)
-            self.model = 'claude-sonnet-4-20250514'
+            self.model = os.getenv('ANTHROPIC_MODEL', DEFAULT_ANTHROPIC_MODEL)
             
         except ImportError:
             raise ImportError("anthropic not installed! Run: pip install anthropic")
@@ -89,6 +97,9 @@ class LLMManager:
                 logger.warning(f"Attempt {attempt + 1}/{self.max_retries} failed: {e}")
                 if attempt == self.max_retries - 1:
                     raise
+                delay = RETRY_BASE_DELAY_SECONDS * (2 ** attempt)
+                logger.info(f"Retrying in {delay}s...")
+                time.sleep(delay)
         
         raise Exception("LLM generation failed")
     
