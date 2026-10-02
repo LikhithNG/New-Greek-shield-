@@ -56,8 +56,8 @@ def black_scholes_greeks(S, K, T, r, sigma, option_type='CALL'):
             'rho': 0.0
         }
     
-    if sigma <= 0 or np.isnan(sigma):
-        sigma = 0.01  # Minimum volatility to avoid division by zero
+    if np.isnan(sigma) or sigma <= 0:
+        raise ValueError(f"Implied volatility must be positive, got {sigma}")
     
     # Calculate d1 and d2
     d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
@@ -142,16 +142,27 @@ def calculate_and_update_greeks():
     # Calculate Greeks for each option
     logging.info("\n🧮 Calculating Greeks...")
     updated = 0
+    skipped = 0
+    failed = 0
     
     for row in rows:
         id_md5 = row[0]
-        S = float(row[1])  # Underlying price
-        K = float(row[2])  # Strike
-        T = float(row[3]) / 365.0  # Days to expiry → years
-        sigma = float(row[4]) if row[4] else 0.01  # Implied volatility
-        option_type = row[5]
         
         try:
+            S = float(row[1])  # Underlying price
+            K = float(row[2])  # Strike
+            T = float(row[3]) / 365.0  # Days to expiry → years
+            option_type = row[5]
+            
+            # Skip unexpired contracts without a usable implied volatility
+            # rather than inventing one: a fake IV produces misleading Greeks.
+            # (Expired contracts use intrinsic values and do not need IV.)
+            sigma = float(row[4]) if row[4] is not None else float('nan')
+            if T > 0 and (np.isnan(sigma) or sigma <= 0):
+                skipped += 1
+                logging.warning(f"Skipping {id_md5}: missing or non-positive IV ({row[4]})")
+                continue
+            
             # Calculate Greeks
             greeks = black_scholes_greeks(S, K, T, RISK_FREE_RATE, sigma, option_type)
             
@@ -181,12 +192,17 @@ def calculate_and_update_greeks():
                 conn.commit()  # Commit in batches
                 
         except Exception as e:
+            failed += 1
             logging.error(f"Error calculating Greeks for {id_md5}: {e}")
             continue
     
     # Final commit
     conn.commit()
     logging.info(f"\n✅ Successfully calculated Greeks for {updated} contracts")
+    logging.info(f"   Skipped (missing/non-positive IV): {skipped}")
+    logging.info(f"   Failed: {failed}")
+    if failed:
+        logging.error(f"❌ {failed} of {len(rows)} contracts failed Greeks calculation")
     
     # Verify
     cursor.execute("SELECT COUNT(*) FROM OPTIONS_SNAPSHOT WHERE DELTA IS NOT NULL")
