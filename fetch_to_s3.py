@@ -22,7 +22,7 @@ def safe_int(value, default=0):
         return default
     try:
         return int(value)
-    except:
+    except (TypeError, ValueError):
         return default
 
 def safe_float(value, default=0.0):
@@ -31,7 +31,7 @@ def safe_float(value, default=0.0):
         return default
     try:
         return float(value)
-    except:
+    except (TypeError, ValueError):
         return default
 
 def fetch_options_data(ticker='AAPL'):
@@ -43,6 +43,8 @@ def fetch_options_data(ticker='AAPL'):
     
     # Get current price
     hist = stock.history(period='1d')
+    if hist.empty:
+        raise ValueError(f"No price history returned for {ticker}")
     underlying_price = hist['Close'].iloc[-1]
     logging.info(f"   Current price: ${underlying_price:.2f}")
     

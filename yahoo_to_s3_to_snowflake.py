@@ -23,7 +23,7 @@ def safe_int(value, default=0):
         return default
     try:
         return int(value)
-    except:
+    except (TypeError, ValueError):
         return default
 
 def safe_float(value, default=0.0):
@@ -31,7 +31,7 @@ def safe_float(value, default=0.0):
         return default
     try:
         return float(value)
-    except:
+    except (TypeError, ValueError):
         return default
 
 def main():
@@ -48,6 +48,8 @@ def main():
     
     stock = yf.Ticker(ticker)
     hist = stock.history(period='1d')
+    if hist.empty:
+        raise ValueError(f"No price history returned for {ticker}")
     underlying_price = hist['Close'].iloc[-1]
     logging.info(f"   Current price: ${underlying_price:.2f}")
     
@@ -142,6 +144,7 @@ def main():
         cursor = conn.cursor()
         snapshot_id = all_options[0]['collection_timestamp']
         loaded = 0
+        failed = 0
         
         for option in all_options:
             try:
@@ -171,10 +174,12 @@ def main():
                 ))
                 loaded += 1
             except Exception as e:
+                failed += 1
+                logging.warning(f"   ⚠️  Insert failed for {option['contract_symbol']}: {e}")
                 continue
         
         conn.commit()
-        logging.info(f"   ✅ Loaded {loaded} rows to Snowflake")
+        logging.info(f"   ✅ Loaded {loaded} rows to Snowflake ({failed} failed)")
         
         # Verify
         cursor.execute("SELECT COUNT(*) FROM OPTIONS_SNAPSHOT")
