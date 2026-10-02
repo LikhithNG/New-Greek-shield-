@@ -137,64 +137,53 @@ class StrategyAgent(BaseAgent):
         GROUP BY SYMBOL
         """
         
+        # Failures propagate so safe_execute reports them instead of the
+        # agent recommending a strategy against placeholder market data.
         try:
             results = self.query_snowflake(query, (ticker,))
-            
-            if not results or len(results) == 0:
-                self.logger.warning("No market data found, using defaults")
-                return {
-                    'underlying_price': 0,
-                    'avg_iv': 0.30,
-                    'iv_regime': 'unknown',
-                    'liquidity': 'unknown',
-                    'total_contracts': 0,
-                    'avg_volume': 0
-                }
-            
-            data = results[0]
-            
-            # Determine IV regime
-            avg_iv = float(data.get('AVG_IV') or 0.30)
-            if avg_iv < 0.20:
-                iv_regime = 'low'
-            elif avg_iv < 0.40:
-                iv_regime = 'normal'
-            else:
-                iv_regime = 'high'
-            
-            # Determine liquidity
-            avg_volume = float(data.get('AVG_VOLUME') or 0)
-            if avg_volume > 1000:
-                liquidity = 'high'
-            elif avg_volume > 100:
-                liquidity = 'moderate'
-            else:
-                liquidity = 'low'
-            
-            market_data = {
-                'underlying_price': float(data.get('UNDERLYING_PRICE') or 0),
-                'avg_iv': avg_iv,
-                'iv_regime': iv_regime,
-                'liquidity': liquidity,
-                'total_contracts': int(data.get('TOTAL_CONTRACTS') or 0),
-                'avg_volume': int(avg_volume)
-            }
-            
-            self.update_state('market_data', market_data)
-            self.logger.info(f"Market data: Price=${market_data['underlying_price']:.2f}, IV={market_data['avg_iv']:.1%}, Contracts={market_data['total_contracts']}")
-            return market_data
-        
         except Exception as e:
             self.logger.error(f"Market analysis failed: {e}")
-            # Return safe defaults
-            return {
-                'underlying_price': 0,
-                'avg_iv': 0.30,
-                'iv_regime': 'unknown',
-                'liquidity': 'unknown',
-                'total_contracts': 0,
-                'avg_volume': 0
-            }
+            raise RuntimeError(f"Market data query failed for {ticker}: {e}") from e
+        
+        if not results:
+            raise ValueError(f"No market data for {ticker} in OPTIONS_SNAPSHOT in the last day")
+        
+        data = results[0]
+        
+        underlying_price = float(data.get('UNDERLYING_PRICE') or 0)
+        if underlying_price <= 0:
+            raise ValueError(f"Missing underlying price for {ticker} in OPTIONS_SNAPSHOT")
+        
+        # Determine IV regime
+        avg_iv = float(data.get('AVG_IV') or 0.30)
+        if avg_iv < 0.20:
+            iv_regime = 'low'
+        elif avg_iv < 0.40:
+            iv_regime = 'normal'
+        else:
+            iv_regime = 'high'
+        
+        # Determine liquidity
+        avg_volume = float(data.get('AVG_VOLUME') or 0)
+        if avg_volume > 1000:
+            liquidity = 'high'
+        elif avg_volume > 100:
+            liquidity = 'moderate'
+        else:
+            liquidity = 'low'
+        
+        market_data = {
+            'underlying_price': underlying_price,
+            'avg_iv': avg_iv,
+            'iv_regime': iv_regime,
+            'liquidity': liquidity,
+            'total_contracts': int(data.get('TOTAL_CONTRACTS') or 0),
+            'avg_volume': int(avg_volume)
+        }
+        
+        self.update_state('market_data', market_data)
+        self.logger.info(f"Market data: Price=${market_data['underlying_price']:.2f}, IV={market_data['avg_iv']:.1%}, Contracts={market_data['total_contracts']}")
+        return market_data
     
     def _analyze_portfolio_risk(self, ticker: str) -> dict:
         """Get current portfolio risk from Snowflake"""
@@ -250,13 +239,15 @@ class StrategyAgent(BaseAgent):
         
         except Exception as e:
             self.logger.warning(f"Portfolio risk query failed (table may not exist): {e}")
+            # 'unknown' (not 'none') so a failed lookup is never read as "no risk"
             return {
                 'net_delta': 0,
                 'net_gamma': 0,
                 'net_theta': 0,
                 'net_vega': 0,
                 'total_positions': 0,
-                'risk_level': 'none'
+                'risk_level': 'unknown',
+                'error': str(e)
             }
     
     def _ai_determine_strategy(self, goal: str, market_data: dict, 
@@ -377,6 +368,13 @@ Respond with JSON containing:
                 'priority': 'high',
                 'message': f"Portfolio risk is HIGH (Delta: {portfolio_risk['net_delta']:.2f})",
                 'reason': "Consider reducing position sizes"
+            })
+        elif portfolio_risk['risk_level'] == 'unknown':
+            recommendations.append({
+                'type': 'risk_warning',
+                'priority': 'high',
+                'message': "Portfolio risk could not be determined",
+                'reason': portfolio_risk.get('error', 'Risk summary unavailable')
             })
         
         # IV-based recommendations

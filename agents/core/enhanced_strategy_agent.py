@@ -180,6 +180,8 @@ Be specific about profit/loss potential."""
             concerns.append("Existing portfolio at elevated risk")
         elif portfolio_risk['risk_level'] == 'low':
             confidence_factors.append("Current portfolio well-balanced")
+        elif portfolio_risk['risk_level'] == 'unknown':
+            concerns.append("Current portfolio risk could not be determined")
         
         confidence_score = max(0, min(100, confidence_score))
         
