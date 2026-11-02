@@ -1,3 +1,19 @@
+<!-- themed-header:start -->
+<a href="https://likhith-ng-portfolio.vercel.app/#proj-greekshield"><img src="docs/readme/hero.svg" width="100%" alt="Greek Shield — AI-Enhanced Options Risk Intelligence System: Moved 1M+ options records from AWS S3 through a 6-layer Snowflake medallion architecture in under 5 minutes, cutting market-data preparation time by 70%."></a>
+
+<p align="center">
+  <a href="https://likhith-ng-portfolio.vercel.app/#proj-greekshield"><img alt="See it on my portfolio" src="https://img.shields.io/badge/see%20it%20on-my%20portfolio-a5a1f0?style=for-the-badge&labelColor=1d1e23"></a>
+  <a href="https://github.com/LikhithNG"><img alt="More of my work" src="https://img.shields.io/badge/more%20of%20my%20work-github.com%2FLikhithNG-5eead4?style=for-the-badge&labelColor=1d1e23"></a>
+</p>
+
+**At a glance**
+
+- Moved 1M+ options records from AWS S3 through a 6-layer Snowflake medallion architecture in under 5 minutes, cutting market-data preparation time by 70%.
+- Computed all 5 Black-Scholes Greeks as Snowflake UDFs for each contract and portfolio, feeding 4 Cortex AI agents and LLM strategy agents that flag concentrated risk.
+
+---
+<!-- themed-header:end -->
+
 # Greek Shield
 
 **Options risk analytics with Black-Scholes Greeks, LLM-assisted agents, Slack alerts and a Streamlit dashboard**
